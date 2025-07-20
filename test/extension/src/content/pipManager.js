@@ -1,10 +1,11 @@
-// pipManager.js - PiP Manager Class
+// PiP Manager Class
 
 (function (window) {
   "use strict";
 
   // Get utilities from global scope
-  const { PIP_ICONS, createSVG, waitForElement, log } = window.YouTubePipUtils;
+  const { PIP_ICONS, createSVG, waitForElement, log, showNotification } =
+    window.YouTubePipUtils;
 
   /**
    * YouTube Picture-in-Picture Manager
@@ -13,6 +14,7 @@
     constructor() {
       this.pipButton = null;
       this.isPipActive = false;
+      this.isInitialized = false;
       this.buttonSelector =
         "#movie_player > div.ytp-chrome-bottom > div.ytp-chrome-controls > div.ytp-right-controls > button.ytp-pip-button.ytp-button";
 
@@ -21,6 +23,12 @@
         inactive: "#fff",
       };
 
+      this.eventHandlers = {
+        enterPip: this.handleEnterPip.bind(this),
+        leavePip: this.handleLeavePip.bind(this),
+      };
+
+      // Auto-initialize
       this.init();
     }
 
@@ -28,14 +36,22 @@
      * Initialize the PiP manager
      */
     async init() {
+      if (this.isInitialized) {
+        log("PiP Manager already initialized");
+        return;
+      }
+
       try {
         log("Initializing PiP Manager...");
         await this.findPipButton();
         this.setupButton();
         this.attachEvents();
+        this.isInitialized = true;
+        await showNotification("PiP Manager", "Initialized successfully");
         log("PiP Manager initialized successfully");
       } catch (error) {
         log(`Failed to initialize PiP Manager: ${error.message}`, "error");
+        await showNotification("PiP Manager", "Failed to initialize");
       }
     }
 
@@ -79,17 +95,49 @@
         ? this.colors.active
         : this.colors.inactive;
 
-      const svgHtml = createSVG(pathData, { fill: "#fff" });
+      const svgHtml = createSVG(pathData, { fill: fillColor });
       this.pipButton.innerHTML = svgHtml;
     }
 
     /**
-     * Toggle PiP state
+     * Toggle PiP state manually
      */
-    togglePipState() {
-      this.isPipActive = !this.isPipActive;
+    async togglePipState() {
+      const video = document.querySelector("video");
+      if (!video) {
+        log("Video element not found", "error");
+        return;
+      }
+
+      try {
+        if (this.isPipActive) {
+          await document.exitPictureInPicture();
+        } else {
+          await video.requestPictureInPicture();
+        }
+      } catch (error) {
+        log(`Failed to toggle PiP: ${error.message}`, "error");
+      }
+    }
+
+    /**
+     * Handle enter PiP event
+     */
+    async handleEnterPip() {
+      this.isPipActive = true;
       this.updateButtonIcon();
-      log(`PiP state toggled: ${this.isPipActive ? "Active" : "Inactive"}`);
+      await showNotification("Picture-in-Picture", "Entered PiP mode");
+      log("Entered PiP mode");
+    }
+
+    /**
+     * Handle leave PiP event
+     */
+    async handleLeavePip() {
+      this.isPipActive = false;
+      this.updateButtonIcon();
+      await showNotification("Picture-in-Picture", "Left PiP mode");
+      log("Left PiP mode");
     }
 
     /**
@@ -98,7 +146,9 @@
     attachEvents() {
       if (!this.pipButton) return;
 
-      this.pipButton.addEventListener("click", () => {
+      // Button click handler
+      this.pipButton.addEventListener("click", (e) => {
+        e.preventDefault();
         this.togglePipState();
       });
 
@@ -115,26 +165,27 @@
       const video = document.querySelector("video");
       if (!video) return;
 
-      video.addEventListener("enterpictureinpicture", () => {
-        this.isPipActive = true;
-        this.updateButtonIcon();
-        log("Entered PiP mode");
-      });
-
-      video.addEventListener("leavepictureinpicture", () => {
-        this.isPipActive = false;
-        this.updateButtonIcon();
-        log("Left PiP mode");
-      });
+      video.addEventListener(
+        "enterpictureinpicture",
+        this.eventHandlers.enterPip
+      );
+      video.addEventListener(
+        "leavepictureinpicture",
+        this.eventHandlers.leavePip
+      );
     }
 
     /**
      * Manually set PiP state
      * @param {boolean} isActive - Whether PiP is active
      */
-    setPipState(isActive) {
+    async setPipState(isActive) {
       this.isPipActive = isActive;
       this.updateButtonIcon();
+      await showNotification(
+        "PiP State",
+        `Set to ${isActive ? "Active" : "Inactive"}`
+      );
       log(`PiP state set to: ${isActive ? "Active" : "Inactive"}`);
     }
 
@@ -157,27 +208,55 @@
     }
 
     /**
+     * Check if PiP Manager is initialized
+     * @returns {boolean} Initialization status
+     */
+    isReady() {
+      return this.isInitialized;
+    }
+
+    /**
+     * Force reinitialize the manager
+     */
+    async reinitialize() {
+      log("Reinitializing PiP Manager...");
+      this.destroy();
+      this.isInitialized = false;
+      await this.init();
+    }
+
+    /**
      * Destroy the PiP manager (cleanup)
      */
     destroy() {
       if (this.pipButton) {
-        // Remove event listeners
-        const video = document.querySelector("video");
-        if (video) {
-          video.removeEventListener(
-            "enterpictureinpicture",
-            this.handleEnterPip
-          );
-          video.removeEventListener(
-            "leavepictureinpicture",
-            this.handleLeavePip
-          );
-        }
+        // Remove click event listener
+        this.pipButton.removeEventListener("click", this.togglePipState);
       }
+
+      // Remove video event listeners
+      const video = document.querySelector("video");
+      if (video) {
+        video.removeEventListener(
+          "enterpictureinpicture",
+          this.eventHandlers.enterPip
+        );
+        video.removeEventListener(
+          "leavepictureinpicture",
+          this.eventHandlers.leavePip
+        );
+      }
+
+      this.pipButton = null;
+      this.isPipActive = false;
+      this.isInitialized = false;
+
       log("PiP Manager destroyed");
     }
   }
 
   // Export to global scope
   window.YouTubePipManager = PipManager;
+
+  log("PiP Manager class loaded");
 })(window);
